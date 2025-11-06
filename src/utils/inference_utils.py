@@ -21,7 +21,20 @@ from src.utils.memory_utils import MemoryTrace
 from src.inference.safety_utils import get_safety_checker
 from src.inference.model_utils import load_model, load_peft_model
 from src.utils.metric_utils import compute_metrics
-from vllm import LLM, SamplingParams
+# vLLM is optional (not supported on native Windows). Provide lightweight fallback for SamplingParams.
+try:
+    from vllm import SamplingParams  # LLM is not needed here
+    _VLLM_AVAILABLE_UTILS = True
+except Exception:
+    _VLLM_AVAILABLE_UTILS = False
+    class SamplingParams:
+        def __init__(self, temperature=1.0, top_p=1.0, top_k=-1, max_tokens=128, n=1, stop=None):
+            self.temperature = temperature
+            self.top_p = top_p
+            self.top_k = top_k
+            self.max_tokens = max_tokens
+            self.n = n
+            self.stop = stop or []
 
 from collections import Counter
 

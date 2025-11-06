@@ -107,8 +107,13 @@ def generate_dataset_config_by_inference(inference_config, kwargs):
     dataset_name = dataset_config.dataset
     update_config(inference_config, **kwargs)
     dataset_config.dataset = dataset_name
-    
+    # propagate eval-time options
     dataset_config.max_words = inference_config.max_words
+    # zero-shot CoT toggle passed to dataset when supported
+    try:
+        dataset_config.zs_cot = inference_config.zs_cot
+    except Exception:
+        pass
 
     return  dataset_config
 

@@ -7,15 +7,34 @@ import threading
 
 import torch
 
+
 def byte2gb(x):
     return int(x / 2**30)
+
+
 # This context manager is used to track the peak memory usage of the process
 class MemoryTrace:
     def __enter__(self):
         gc.collect()
-        torch.cuda.empty_cache()
-        torch.cuda.reset_max_memory_allocated()  # reset the peak gauge to zero
-        self.begin = byte2gb(torch.cuda.memory_allocated())
+        try:
+            if torch.cuda.is_available():
+                try:
+                    torch.cuda.empty_cache()
+                except Exception:
+                    pass
+                # Guard against missing peak reset symbols on some builds
+                try:
+                    torch.cuda.reset_max_memory_allocated()
+                except Exception:
+                    pass
+                try:
+                    self.begin = byte2gb(torch.cuda.memory_allocated())
+                except Exception:
+                    self.begin = 0
+            else:
+                self.begin = 0
+        except Exception:
+            self.begin = 0
         self.process = psutil.Process()
         self.cpu_begin = byte2gb(self.cpu_mem_used())
         self.peak_monitoring = True
@@ -33,10 +52,6 @@ class MemoryTrace:
 
         while True:
             self.cpu_peak = max(self.cpu_mem_used(), self.cpu_peak)
-
-            # can't sleep or will not catch the peak right (this comment is here on purpose)
-            # time.sleep(0.001) # 1msec
-
             if not self.peak_monitoring:
                 break
 
@@ -44,17 +59,45 @@ class MemoryTrace:
         self.peak_monitoring = False
 
         gc.collect()
-        torch.cuda.empty_cache()
-        self.end = byte2gb(torch.cuda.memory_allocated())
-        self.peak = byte2gb(torch.cuda.max_memory_allocated())
-        cuda_info = torch.cuda.memory_stats()
-        self.peak_active_gb = byte2gb(cuda_info["active_bytes.all.peak"])
-        self.cuda_malloc_retires = cuda_info.get("num_alloc_retries", 0)
-        self.peak_active_gb = byte2gb(cuda_info["active_bytes.all.peak"])
-        self.m_cuda_ooms = cuda_info.get("num_ooms", 0)
-        self.used = byte2gb(self.end - self.begin)
-        self.peaked = byte2gb(self.peak - self.begin)
-        self.max_reserved = byte2gb(torch.cuda.max_memory_reserved())
+        try:
+            if torch.cuda.is_available():
+                try:
+                    torch.cuda.empty_cache()
+                except Exception:
+                    pass
+                try:
+                    self.end = byte2gb(torch.cuda.memory_allocated())
+                except Exception:
+                    self.end = 0
+                try:
+                    self.peak = byte2gb(torch.cuda.max_memory_allocated())
+                except Exception:
+                    self.peak = 0
+                try:
+                    cuda_info = torch.cuda.memory_stats()
+                    self.peak_active_gb = byte2gb(cuda_info.get("active_bytes.all.peak", 0))
+                    self.cuda_malloc_retires = cuda_info.get("num_alloc_retries", 0)
+                    self.m_cuda_ooms = cuda_info.get("num_ooms", 0)
+                except Exception:
+                    self.peak_active_gb = 0
+                    self.cuda_malloc_retires = 0
+                    self.m_cuda_ooms = 0
+                self.used = byte2gb(self.end - self.begin)
+                self.peaked = byte2gb(self.peak - self.begin)
+                try:
+                    self.max_reserved = byte2gb(torch.cuda.max_memory_reserved())
+                except Exception:
+                    self.max_reserved = 0
+            else:
+                self.end = self.peak = self.used = self.peaked = self.max_reserved = 0
+                self.peak_active_gb = 0
+                self.cuda_malloc_retires = 0
+                self.m_cuda_ooms = 0
+        except Exception:
+            self.end = self.peak = self.used = self.peaked = self.max_reserved = 0
+            self.peak_active_gb = 0
+            self.cuda_malloc_retires = 0
+            self.m_cuda_ooms = 0
 
         self.cpu_end = self.cpu_mem_used()
         self.cpu_used = byte2gb(self.cpu_end - self.cpu_begin)

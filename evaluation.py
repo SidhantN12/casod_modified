@@ -32,11 +32,19 @@ from src.utils.dataset_utils import get_preprocessed_dataset
 from src.utils.dataset_utils import *
 from src.inference.model_utils import load_model, load_peft_model
 from src.utils.inference_utils import eval_inference
-from vllm import LLM, SamplingParams
+try:
+    from vllm import LLM, SamplingParams  # vLLM not supported on native Windows
+    _VLLM_AVAILABLE = True
+except Exception:
+    _VLLM_AVAILABLE = False
 from src.model_checkpointing import load_fsdp_model_checkpoint
 import gc
 import torch
-from vllm.model_executor.parallel_utils.parallel_state import destroy_model_parallel
+try:
+    from vllm.model_executor.parallel_utils.parallel_state import destroy_model_parallel
+except Exception:
+    def destroy_model_parallel():
+        return None
 
 def main(**kwargs):
     update_config((inference_config, ), **kwargs)
@@ -69,7 +77,7 @@ def main(**kwargs):
 
     rank_model = None
     rank_tokenizer = None
-    # model = load_model(inference_config.model_name, inference_config.quantization)
+    # Preload a HF model for non-vLLM paths (peft/fsdp/transformers fallback)
     model = AutoModelForCausalLM.from_pretrained(
         inference_config.model_name,
         return_dict=True,
@@ -100,7 +108,7 @@ def main(**kwargs):
                 continue
             print("ckpt", ckpt)
             model = load_peft_model(model, ckpt)
-            model.to('cuda')
+
 
             # if not inference_config.quantization:
             #     print("model half")
@@ -131,7 +139,7 @@ def main(**kwargs):
                 continue
             print("ckpt", ckpt)
             load_fsdp_model_checkpoint(model, ckpt)
-            # model.to('cuda')
+            #
             model.eval()
             print("tokenizer pad token id:", tokenizer.pad_token_id)
             macro_res = eval_inference(
@@ -146,45 +154,37 @@ def main(**kwargs):
             )
             print("macro_res:", macro_res)
     elif inference_config.load_type == 'hf':
-        if inference_config.train_dataset == 'vanilla':
-            ckpt = inference_config.model_name
-            available_gpus = os.environ['CUDA_VISIBLE_DEVICES'].split(',')
-            print("available gpus:", available_gpus)
-            model = LLM(ckpt, tensor_parallel_size=len(available_gpus))
+        if not _VLLM_AVAILABLE:
+            print("vLLM not available; falling back to Transformers.generate on this platform.")
+            from copy import deepcopy
+            fallback_cfg = deepcopy(inference_config)
+            fallback_cfg.load_type = 'hf_transformers'
+
+            model.eval()
             macro_res = eval_inference(
                 model,
-                inference_config,
+                fallback_cfg,
                 eval_dataloader,
-                local_rank="cuda",  
+                local_rank="cuda",
                 tokenizer=tokenizer,
-                model_dir=ckpt,
+                model_dir=inference_config.model_name,
                 train_config=None,
                 infer_cfg_ins=infer_cfg_ins,
                 rank_model=rank_model,
-                rank_tokenizer=rank_tokenizer
+                rank_tokenizer=rank_tokenizer,
             )
-            print("macro_res:", macro_res)      
-            destroy_model_parallel()
-            del model
-            gc.collect()
-            torch.cuda.empty_cache()
+            print("macro_res:", macro_res)
         else:
-            ckpt_dirs = get_subdirectories(inference_config.saved_model_dir)
-            for ckpt in sorted(ckpt_dirs):
-                if 'epoch' not in ckpt.split('/')[-1]:
-                    continue
-                epoch = int(ckpt.split('/')[-1].split('-')[-1])
-                if epoch < inference_config.eval_epoch_begin:
-                    continue
-                print("ckpt", ckpt)
-                available_gpus = os.environ['CUDA_VISIBLE_DEVICES'].split(',')
+            if inference_config.train_dataset == 'vanilla':
+                ckpt = inference_config.model_name
+                available_gpus = os.environ.get('CUDA_VISIBLE_DEVICES', '0').split(',')
                 print("available gpus:", available_gpus)
-                model = LLM(ckpt, tensor_parallel_size=len(available_gpus), gpu_memory_utilization=0.95)
+                model = LLM(ckpt, tensor_parallel_size=len(available_gpus))
                 macro_res = eval_inference(
                     model,
                     inference_config,
                     eval_dataloader,
-                    local_rank="cuda", 
+                    local_rank="cuda",  
                     tokenizer=tokenizer,
                     model_dir=ckpt,
                     train_config=None,
@@ -192,12 +192,41 @@ def main(**kwargs):
                     rank_model=rank_model,
                     rank_tokenizer=rank_tokenizer
                 )
-                print("macro_res:", macro_res)
-                
+                print("macro_res:", macro_res)      
                 destroy_model_parallel()
                 del model
                 gc.collect()
                 torch.cuda.empty_cache()
+            else:
+                ckpt_dirs = get_subdirectories(inference_config.saved_model_dir)
+                for ckpt in sorted(ckpt_dirs):
+                    if 'epoch' not in ckpt.split('/')[-1]:
+                        continue
+                    epoch = int(ckpt.split('/')[-1].split('-')[-1])
+                    if epoch < inference_config.eval_epoch_begin:
+                        continue
+                    print("ckpt", ckpt)
+                    available_gpus = os.environ.get('CUDA_VISIBLE_DEVICES', '0').split(',')
+                    print("available gpus:", available_gpus)
+                    model = LLM(ckpt, tensor_parallel_size=len(available_gpus), gpu_memory_utilization=0.95)
+                    macro_res = eval_inference(
+                        model,
+                        inference_config,
+                        eval_dataloader,
+                        local_rank="cuda", 
+                        tokenizer=tokenizer,
+                        model_dir=ckpt,
+                        train_config=None,
+                        infer_cfg_ins=infer_cfg_ins,
+                        rank_model=rank_model,
+                        rank_tokenizer=rank_tokenizer
+                    )
+                    print("macro_res:", macro_res)
+                    
+                    destroy_model_parallel()
+                    del model
+                    gc.collect()
+                    torch.cuda.empty_cache()
     
 
 if __name__ == "__main__":

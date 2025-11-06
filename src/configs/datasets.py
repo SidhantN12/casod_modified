@@ -8,6 +8,7 @@ class bbh_eval_dataset:
     train_data_path: str = "null"
     test_data_path: str = "./dataset/bbh/bbh_all_data/all_task_test.json"
     max_words: int = 150
+    zs_cot: bool = False
 
 @dataclass
 class bbhtrain_eval_dataset:
@@ -17,6 +18,7 @@ class bbhtrain_eval_dataset:
     train_data_path: str = "null"
     test_data_path: str = "./dataset/bbh/bbh_all_data/all_task_train_right_answer.json"
     max_words: int = 150
+    zs_cot: bool = False
 
 @dataclass
 class bbh_dataset:
@@ -139,6 +141,7 @@ class bb_eval_dataset:
     train_data_path: str = "null"
     test_data_path: str = "./dataset/bb/merged_data/bb_sub_task_random100test.json"
     max_words: int = 150
+    zs_cot: bool = False
 
 @dataclass
 class agieval_eval_dataset:
